@@ -71,7 +71,7 @@
     animation: titleShift 6s linear infinite;
   }
   @keyframes titleShift { 0%{background-position:0%} 100%{background-position:300%} }
-  header p { color: var(--muted); font-size: 0.65rem; letter-spacing: 0.3em; margin-top: 6px; }
+  header p { color: var(--muted); font-size: 0.7rem; letter-spacing: 0.2em; margin-top: 4px; }
 
   /* ── LOBBY ── */
   #lobby {
@@ -240,20 +240,12 @@
   /* ── GRID ── */
   .grid-wrapper {
     position: relative;
-    background: #080810;
-    border: 1px solid #1a1a2e;
-    padding: 14px;
-    box-shadow: 0 0 80px #00000099, 0 0 30px #0005;
-    overflow: hidden;
+    background: var(--panel);
+    border: 1px solid var(--grid-dot);
+    padding: 20px;
+    box-shadow: 0 0 60px #00000088;
   }
-  .grid-wrapper::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 50% 50%, #0d1a3a18 0%, transparent 70%);
-    pointer-events: none;
-  }
-  canvas { display: block; cursor: crosshair; image-rendering: crisp-edges; max-width: 100%; }
+  canvas { display: block; cursor: crosshair; }
   canvas.not-your-turn { cursor: not-allowed; }
 
   /* ── CONTROLS ── */
@@ -454,7 +446,7 @@ let opponentIn  = false;
 let lobbyGridSize = 20;
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-const CELL = 28;
+const CELL = 26;
 let GRID     = 20;
 let board    = [];
 let enclosed = [];
@@ -595,6 +587,7 @@ function handleMessage(msg) {
         initGame();
         showGame();
         initCanvas();
+        draw();
         updateUI();
         // Small delay to ensure host canvas is ready before broadcasting
         setTimeout(() => broadcastState('GAME_START'), 200);
@@ -614,6 +607,7 @@ function handleMessage(msg) {
         gameOver   = msg.gameOver;
         showGame();   // show game screen NOW (after we have state)
         initCanvas();
+        draw();
         updateUI();
       }
       break;
@@ -625,17 +619,9 @@ function handleMessage(msg) {
       scores     = msg.scores;
       turn       = msg.turn;
       gameOver   = msg.gameOver;
-      // Animate opponent's piece drop-in
-      if (msg.col !== undefined) newPieces.set(idx(msg.col, msg.row), Date.now());
-      // Animate captures
-      if (msg.gained > 0) {
-        for (let ri = 0; ri < GRID; ri++) for (let ci = 0; ci < GRID; ci++) {
-          const ni = idx(ci,ri);
-          if (enclosed[ni] && enclosedBy[ni] === msg.player) captureFlash.set(ni, Date.now());
-        }
-        showGainEffect(msg.col, msg.row, msg.gained, msg.player);
-      }
+      draw();
       updateUI();
+      if (msg.gained > 0) showGainEffect(msg.col, msg.row, msg.gained, msg.player);
       if (gameOver) endGame();
       break;
 
@@ -648,6 +634,7 @@ function handleMessage(msg) {
       turn       = msg.turn;
       gameOver   = msg.gameOver;
       initCanvas();
+      draw();
       updateUI();
       break;
   }
@@ -690,16 +677,9 @@ function initCanvas() {
   canvas = document.getElementById('canvas');
   ctx    = canvas.getContext('2d');
   const size = (GRID - 1) * CELL;
-  const W = size + Math.round(CELL * 1.5);
-  const H = size + Math.round(CELL * 1.5);
-  canvas.width  = W;
-  canvas.height = H;
-  canvas.style.width  = '';
-  canvas.style.height = '';
+  canvas.width  = size + CELL * 1.5;
+  canvas.height = size + CELL * 1.5;
   canvas.onclick = handleClick;
-  newPieces.clear();
-  captureFlash.clear();
-  startRenderLoop();
 }
 
 function setSize(n) {
@@ -711,6 +691,7 @@ function setSize(n) {
 function resetGame() {
   initGame();
   initCanvas();
+  draw();
   updateUI();
   broadcastState('RESET');
 }
@@ -736,10 +717,8 @@ function handleClick(e) {
   if (turn !== mySymbol) return;  // not your turn
 
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const px = (e.clientX - rect.left) * scaleX;
-  const py = (e.clientY - rect.top)  * scaleY;
+  const px = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const py = (e.clientY - rect.top)  * (canvas.height / rect.height);
   const {col, row} = canvasToGrid(px, py);
 
   if (!valid(col, row)) return;
@@ -748,7 +727,6 @@ function handleClick(e) {
   if (enclosed[i]) return;
 
   board[i] = turn;
-  newPieces.set(i, Date.now()); // animate drop-in
 
   const newTerritory = findNewlyEnclosed(turn);
   let gained = 0;
@@ -756,7 +734,6 @@ function handleClick(e) {
     if (!enclosed[ci]) {
       enclosed[ci]   = true;
       enclosedBy[ci] = turn;
-      captureFlash.set(ci, Date.now()); // animate capture flash
       gained++;
     }
   });
@@ -771,6 +748,7 @@ function handleClick(e) {
   const prevTurn = turn;
   turn = turn === 'O' ? 'X' : 'O';
 
+  draw();
   updateUI();
 
   // Broadcast move to opponent
@@ -824,67 +802,28 @@ function findNewlyEnclosed(player) {
 }
 
 // ─── DRAW ─────────────────────────────────────────────────────────────────────
-// ─── ANIMATION STATE ─────────────────────────────────────────────────────────
-let animFrame = null;
-let scanOffset = 0;
-let pulseT = 0;
-let newPieces = new Map(); // idx -> timestamp of placement for drop-in animation
-let captureFlash = new Map(); // idx -> timestamp for capture flash
-
-function startRenderLoop() {
-  if (animFrame) cancelAnimationFrame(animFrame);
-  function loop() {
-    scanOffset = (scanOffset + 0.3) % (CELL * 2);
-    pulseT += 0.04;
-    animFrame = requestAnimationFrame(loop);
-  }
-  loop();
-}
-
-function stopRenderLoop() {
-  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
-}
-
-// ─── DRAW ─────────────────────────────────────────────────────────────────────
 function draw() {
   if (!canvas || !ctx) return;
-  const W = canvas.width;
-  const H = canvas.height;
+  const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-
-  // ── Background
-  ctx.fillStyle = '#0a0b14';
+  ctx.fillStyle = '#0f0f1a';
   ctx.fillRect(0, 0, W, H);
 
-  // ── Animated scan line
-  ctx.save();
-  const scanGrad = ctx.createLinearGradient(0, scanOffset - CELL*2, 0, scanOffset + CELL*2);
-  scanGrad.addColorStop(0, 'transparent');
-  scanGrad.addColorStop(0.5, 'rgba(255,255,255,0.025)');
-  scanGrad.addColorStop(1, 'transparent');
-  ctx.fillStyle = scanGrad;
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-
-  // ── Territory glow (soft fill per cell)
+  // Territory
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       const i = idx(c, r);
-      if (!enclosed[i]) continue;
-      const {x, y} = gridToCanvas(c, r);
-      const pulse = 0.07 + 0.03 * Math.sin(pulseT + c * 0.3 + r * 0.3);
-      ctx.fillStyle = enclosedBy[i] === 'O'
-        ? `rgba(0,229,255,${pulse})`
-        : `rgba(255,77,109,${pulse})`;
-      ctx.fillRect(x - CELL/2, y - CELL/2, CELL, CELL);
+      if (enclosed[i]) {
+        const {x, y} = gridToCanvas(c, r);
+        ctx.fillStyle = enclosedBy[i] === 'O' ? '#00e5ff0e' : '#ff4d6d0e';
+        ctx.fillRect(x - CELL/2, y - CELL/2, CELL, CELL);
+      }
     }
   }
 
-  // ── Grid lines — clearly visible
+  // Grid lines
+  ctx.strokeStyle = 'rgba(80,100,180,0.45)'; ctx.lineWidth = 0.5;
   for (let i = 0; i < GRID; i++) {
-    const alpha = 0.55 + 0.1 * Math.sin(pulseT * 0.4 + i * 0.25);
-    ctx.strokeStyle = `rgba(80,100,180,${alpha})`;
-    ctx.lineWidth = 0.6;
     const {x:x0,y:y0} = gridToCanvas(i,0);
     const {x:x1,y:y1} = gridToCanvas(i,GRID-1);
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
@@ -893,44 +832,27 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
 
-  // ── Intersection dots
-  ctx.fillStyle = 'rgba(120,140,255,0.7)';
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      if (board[idx(c,r)]) continue;
-      const {x,y} = gridToCanvas(c,r);
-      ctx.beginPath(); ctx.arc(x,y,1.2,0,Math.PI*2); ctx.fill();
-    }
+  // Star points
+  if (GRID >= 9) {
+    const stars = GRID===20?[[3,3],[16,3],[3,16],[16,16],[9,9],[9,3],[3,9],[16,9],[9,16]]:GRID===26?[[3,3],[22,3],[3,22],[22,22],[12,12],[12,3],[3,12],[22,12],[12,22]]:[[3,3],[28,3],[3,28],[28,28],[15,15],[15,3],[3,15],[28,15],[15,28]];
+    ctx.fillStyle = 'rgba(100,120,220,0.6)';
+    stars.forEach(([c,r])=>{ const{x,y}=gridToCanvas(c,r); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
   }
 
-  // ── Connection lines
   drawConnections();
 
-  // ── Pieces
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       const piece = board[idx(c,r)];
       if (!piece) continue;
       const {x,y} = gridToCanvas(c,r);
-      drawPiece(piece, x, y, enclosed[idx(c,r)], idx(c,r));
+      drawPiece(piece, x, y, enclosed[idx(c,r)]);
     }
   }
 
-  // ── Capture flash
-  captureFlash.forEach((ts, ci) => {
-    const age = (Date.now() - ts) / 600;
-    if (age > 1) { captureFlash.delete(ci); return; }
-    const c = ci % GRID, r = Math.floor(ci / GRID);
-    const {x,y} = gridToCanvas(c,r);
-    const owner = enclosedBy[ci];
-    const col = owner === 'O' ? '0,229,255' : '255,77,109';
-    ctx.fillStyle = `rgba(${col},${0.4 * (1-age)})`;
-    ctx.beginPath(); ctx.arc(x,y,CELL*0.8*(1-age*0.5),0,Math.PI*2); ctx.fill();
-  });
-
-  // ── Not-your-turn dim
-  if (!gameOver && mySymbol && turn !== mySymbol) {
-    ctx.fillStyle = 'rgba(8,8,16,0.18)';
+  // Dim overlay if not your turn
+  if (!gameOver && turn !== mySymbol) {
+    ctx.fillStyle = '#0a0a0f22';
     ctx.fillRect(0, 0, W, H);
   }
 }
@@ -949,67 +871,34 @@ function drawConnections() {
         const ni = idx(nc,nr);
         if (board[ni]!==piece || enclosed[ni]) return;
         const {x:x2,y:y2} = gridToCanvas(nc,nr);
-        const isO = piece === 'O';
-        const pulse = 0.55 + 0.2 * Math.sin(pulseT + c*0.4 + r*0.4);
-        ctx.strokeStyle = isO ? `rgba(0,229,255,${pulse})` : `rgba(255,77,109,${pulse})`;
-        ctx.lineWidth = 1.2;
-        ctx.lineCap = 'round';
+        const color = piece==='O'?'#00e5ff':'#ff4d6d';
+        ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.globalAlpha=0.4;
+        ctx.shadowColor=color; ctx.shadowBlur=6;
         ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+        ctx.shadowBlur=0; ctx.globalAlpha=1;
       });
     }
   }
 }
 
-function drawPiece(type, x, y, isEnclosed, pieceIdx) {
-  const isO = type === 'O';
-  const col  = isO ? '0,229,255' : '255,77,109';
-  const r    = CELL * 0.32;
-
-  // Drop-in animation
-  let scale = 1;
-  if (newPieces.has(pieceIdx)) {
-    const age = (Date.now() - newPieces.get(pieceIdx)) / 250;
-    if (age < 1) {
-      scale = 0.3 + 0.7 * (1 - Math.pow(1 - age, 3));
-    } else {
-      newPieces.delete(pieceIdx);
-    }
-  }
-
-  const alpha = isEnclosed ? 0.22 : 1;
-  const pulseMult = isEnclosed ? 1 : (1 + 0.08 * Math.sin(pulseT + x * 0.05 + y * 0.05));
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(scale, scale);
-  ctx.globalAlpha = alpha;
-
-  if (!isEnclosed) {
-    ctx.shadowColor = `rgba(${col},1)`;
-    ctx.shadowBlur  = 14 * pulseMult;
-  }
-
+function drawPiece(type, x, y, isEnclosed) {
+  const isO  = type === 'O';
+  const color = isO ? '#00e5ff' : '#ff4d6d';
+  const r = CELL * 0.32;
+  ctx.globalAlpha = isEnclosed ? 0.3 : 1;
+  if (!isEnclosed) { ctx.shadowColor=color; ctx.shadowBlur=12; }
   if (isO) {
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
-    ctx.strokeStyle = `rgba(${col},1)`;
-    ctx.lineWidth = isEnclosed ? 1 : 2;
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(0, 0, r*0.25, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(${col},${isEnclosed?0.4:1})`;
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.strokeStyle=color; ctx.lineWidth=isEnclosed?1.5:2.5; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x,y,r*0.25,0,Math.PI*2);
+    ctx.fillStyle=color; ctx.fill();
   } else {
-    ctx.strokeStyle = `rgba(${col},1)`;
-    ctx.lineWidth = isEnclosed ? 1 : 2;
-    ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(-r,-r); ctx.lineTo(r,r); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(r,-r); ctx.lineTo(-r,r); ctx.stroke();
+    ctx.strokeStyle=color; ctx.lineWidth=isEnclosed?1.5:2.5; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x-r,y-r); ctx.lineTo(x+r,y+r); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+r,y-r); ctx.lineTo(x-r,y+r); ctx.stroke();
   }
-
-  ctx.shadowBlur = 0;
-  ctx.globalAlpha = 1;
-  ctx.restore();
+  ctx.shadowBlur=0; ctx.globalAlpha=1;
 }
-
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 function updateUI() {
@@ -1061,13 +950,16 @@ function endGame() {
 function showGainEffect(col, row, count, player) {
   if (!canvas) return;
   const wrapper = document.getElementById('grid-wrapper');
-  const {x, y}  = gridToCanvas(col, row);
+  const rect    = canvas.getBoundingClientRect();
+  const scaleX  = canvas.width  / rect.width;
+  const scaleY  = canvas.height / rect.height;
+  const {x,y}   = gridToCanvas(col, row);
   const el = document.createElement('div');
   el.className   = 'captured-notice';
   el.textContent = `+${count}`;
   el.style.color = player==='O'?'#00e5ff':'#ff4d6d';
-  el.style.left  = (x + 20) + 'px';
-  el.style.top   = (y + 20) + 'px';
+  el.style.left  = (x/scaleX+20)+'px';
+  el.style.top   = (y/scaleY+20)+'px';
   wrapper.appendChild(el);
   setTimeout(()=>el.remove(), 1500);
 }
