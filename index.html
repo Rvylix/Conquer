@@ -62,13 +62,16 @@
     font-family: 'Orbitron', sans-serif;
     font-weight: 900;
     font-size: clamp(1.8rem, 5vw, 3rem);
-    letter-spacing: 0.3em;
-    background: linear-gradient(135deg, var(--o-color), var(--accent), var(--x-color));
+    letter-spacing: 0.35em;
+    background: linear-gradient(90deg, #00e5ff, #7b6fff, #ff4d6d, #7b6fff, #00e5ff);
+    background-size: 300% 100%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    animation: titleShift 6s linear infinite;
   }
-  header p { color: var(--muted); font-size: 0.7rem; letter-spacing: 0.2em; margin-top: 4px; }
+  @keyframes titleShift { 0%{background-position:0%} 100%{background-position:300%} }
+  header p { color: var(--muted); font-size: 0.65rem; letter-spacing: 0.3em; margin-top: 6px; }
 
   /* ── LOBBY ── */
   #lobby {
@@ -237,10 +240,18 @@
   /* ── GRID ── */
   .grid-wrapper {
     position: relative;
-    background: var(--panel);
-    border: 1px solid var(--grid-dot);
-    padding: 20px;
-    box-shadow: 0 0 60px #00000088;
+    background: #080810;
+    border: 1px solid #1a1a2e;
+    padding: 14px;
+    box-shadow: 0 0 80px #00000099, 0 0 30px #0005;
+    overflow: hidden;
+  }
+  .grid-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 50%, #0d1a3a18 0%, transparent 70%);
+    pointer-events: none;
   }
   canvas { display: block; cursor: crosshair; }
   canvas.not-your-turn { cursor: not-allowed; }
@@ -329,9 +340,9 @@
       <h2>// GRID SIZE</h2>
       <div class="config-row">
         <span>SIZE:</span>
-        <button onclick="setLobbySize(9)"  id="lbtn-9"  class="selected">9×9</button>
-        <button onclick="setLobbySize(13)" id="lbtn-13">13×13</button>
-        <button onclick="setLobbySize(19)" id="lbtn-19">19×19</button>
+        <button onclick="setLobbySize(20)" id="lbtn-20" class="selected">20×20</button>
+        <button onclick="setLobbySize(26)" id="lbtn-26">26×26</button>
+        <button onclick="setLobbySize(32)" id="lbtn-32">32×32</button>
       </div>
     </div>
 
@@ -395,9 +406,9 @@
 
     <div class="size-selector" id="size-selector" style="display:none;">
       <span>GRID SIZE:</span>
-      <button onclick="setSize(9)"  id="btn-9"  class="selected">9×9</button>
-      <button onclick="setSize(13)" id="btn-13">13×13</button>
-      <button onclick="setSize(19)" id="btn-19">19×19</button>
+      <button onclick="setSize(20)" id="btn-20" class="selected">20×20</button>
+      <button onclick="setSize(26)" id="btn-26">26×26</button>
+      <button onclick="setSize(32)" id="btn-32">32×32</button>
     </div>
 
     <div class="grid-wrapper" id="grid-wrapper">
@@ -440,11 +451,11 @@ let mySymbol    = null;   // 'O' or 'X' — assigned when joining
 let roomCode    = null;
 let isHost      = false;
 let opponentIn  = false;
-let lobbyGridSize = 9;
+let lobbyGridSize = 20;
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-const CELL = 40;
-let GRID     = 9;
+const CELL = 28;
+let GRID     = 20;
 let board    = [];
 let enclosed = [];
 let enclosedBy = [];
@@ -584,7 +595,6 @@ function handleMessage(msg) {
         initGame();
         showGame();
         initCanvas();
-        draw();
         updateUI();
         // Small delay to ensure host canvas is ready before broadcasting
         setTimeout(() => broadcastState('GAME_START'), 200);
@@ -604,7 +614,6 @@ function handleMessage(msg) {
         gameOver   = msg.gameOver;
         showGame();   // show game screen NOW (after we have state)
         initCanvas();
-        draw();
         updateUI();
       }
       break;
@@ -616,9 +625,17 @@ function handleMessage(msg) {
       scores     = msg.scores;
       turn       = msg.turn;
       gameOver   = msg.gameOver;
-      draw();
+      // Animate opponent's piece drop-in
+      if (msg.col !== undefined) newPieces.set(idx(msg.col, msg.row), Date.now());
+      // Animate captures
+      if (msg.gained > 0) {
+        for (let ri = 0; ri < GRID; ri++) for (let ci = 0; ci < GRID; ci++) {
+          const ni = idx(ci,ri);
+          if (enclosed[ni] && enclosedBy[ni] === msg.player) captureFlash.set(ni, Date.now());
+        }
+        showGainEffect(msg.col, msg.row, msg.gained, msg.player);
+      }
       updateUI();
-      if (msg.gained > 0) showGainEffect(msg.col, msg.row, msg.gained, msg.player);
       if (gameOver) endGame();
       break;
 
@@ -631,7 +648,6 @@ function handleMessage(msg) {
       turn       = msg.turn;
       gameOver   = msg.gameOver;
       initCanvas();
-      draw();
       updateUI();
       break;
   }
@@ -677,6 +693,9 @@ function initCanvas() {
   canvas.width  = size + CELL * 1.5;
   canvas.height = size + CELL * 1.5;
   canvas.onclick = handleClick;
+  newPieces.clear();
+  captureFlash.clear();
+  startRenderLoop();
 }
 
 function setSize(n) {
@@ -688,7 +707,6 @@ function setSize(n) {
 function resetGame() {
   initGame();
   initCanvas();
-  draw();
   updateUI();
   broadcastState('RESET');
 }
@@ -724,6 +742,7 @@ function handleClick(e) {
   if (enclosed[i]) return;
 
   board[i] = turn;
+  newPieces.set(i, Date.now()); // animate drop-in
 
   const newTerritory = findNewlyEnclosed(turn);
   let gained = 0;
@@ -731,6 +750,7 @@ function handleClick(e) {
     if (!enclosed[ci]) {
       enclosed[ci]   = true;
       enclosedBy[ci] = turn;
+      captureFlash.set(ci, Date.now()); // animate capture flash
       gained++;
     }
   });
@@ -745,7 +765,6 @@ function handleClick(e) {
   const prevTurn = turn;
   turn = turn === 'O' ? 'X' : 'O';
 
-  draw();
   updateUI();
 
   // Broadcast move to opponent
@@ -799,28 +818,66 @@ function findNewlyEnclosed(player) {
 }
 
 // ─── DRAW ─────────────────────────────────────────────────────────────────────
+// ─── ANIMATION STATE ─────────────────────────────────────────────────────────
+let animFrame = null;
+let scanOffset = 0;
+let pulseT = 0;
+let newPieces = new Map(); // idx -> timestamp of placement for drop-in animation
+let captureFlash = new Map(); // idx -> timestamp for capture flash
+
+function startRenderLoop() {
+  if (animFrame) cancelAnimationFrame(animFrame);
+  function loop() {
+    scanOffset = (scanOffset + 0.3) % (CELL * 2);
+    pulseT += 0.04;
+    animFrame = requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+function stopRenderLoop() {
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
 function draw() {
   if (!canvas || !ctx) return;
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#0f0f1a';
+
+  // ── Background
+  ctx.fillStyle = '#080810';
   ctx.fillRect(0, 0, W, H);
 
-  // Territory
+  // ── Animated scan line
+  ctx.save();
+  const scanGrad = ctx.createLinearGradient(0, scanOffset - CELL, 0, scanOffset + CELL);
+  scanGrad.addColorStop(0, 'transparent');
+  scanGrad.addColorStop(0.5, '#ffffff04');
+  scanGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = scanGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+
+  // ── Territory glow (soft fill per cell)
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       const i = idx(c, r);
-      if (enclosed[i]) {
-        const {x, y} = gridToCanvas(c, r);
-        ctx.fillStyle = enclosedBy[i] === 'O' ? '#00e5ff0e' : '#ff4d6d0e';
-        ctx.fillRect(x - CELL/2, y - CELL/2, CELL, CELL);
-      }
+      if (!enclosed[i]) continue;
+      const {x, y} = gridToCanvas(c, r);
+      const pulse = 0.04 + 0.02 * Math.sin(pulseT + c * 0.3 + r * 0.3);
+      ctx.fillStyle = enclosedBy[i] === 'O'
+        ? `rgba(0,229,255,${pulse})`
+        : `rgba(255,77,109,${pulse})`;
+      ctx.fillRect(x - CELL/2, y - CELL/2, CELL, CELL);
     }
   }
 
-  // Grid lines
-  ctx.strokeStyle = '#1e2040'; ctx.lineWidth = 1;
+  // ── Grid lines (ultra thin)
+  ctx.lineWidth = 0.3;
   for (let i = 0; i < GRID; i++) {
+    const alpha = 0.12 + 0.04 * Math.sin(pulseT * 0.5 + i * 0.2);
+    ctx.strokeStyle = `rgba(100,110,200,${alpha})`;
     const {x:x0,y:y0} = gridToCanvas(i,0);
     const {x:x1,y:y1} = gridToCanvas(i,GRID-1);
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
@@ -829,27 +886,44 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
 
-  // Star points
-  if (GRID >= 9) {
-    const stars = GRID===9?[[2,2],[6,2],[2,6],[6,6],[4,4]]:GRID===13?[[3,3],[9,3],[3,9],[9,9],[6,6]]:[[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
-    ctx.fillStyle = '#2a2d5a';
-    stars.forEach(([c,r])=>{ const{x,y}=gridToCanvas(c,r); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
+  // ── Intersection dots (faint)
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (board[idx(c,r)]) continue;
+      const {x,y} = gridToCanvas(c,r);
+      ctx.fillStyle = 'rgba(80,90,160,0.25)';
+      ctx.beginPath(); ctx.arc(x,y,0.8,0,Math.PI*2); ctx.fill();
+    }
   }
 
+  // ── Connection lines
   drawConnections();
 
+  // ── Pieces
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       const piece = board[idx(c,r)];
       if (!piece) continue;
       const {x,y} = gridToCanvas(c,r);
-      drawPiece(piece, x, y, enclosed[idx(c,r)]);
+      drawPiece(piece, x, y, enclosed[idx(c,r)], idx(c,r));
     }
   }
 
-  // Dim overlay if not your turn
-  if (!gameOver && turn !== mySymbol) {
-    ctx.fillStyle = '#0a0a0f22';
+  // ── Capture flash
+  captureFlash.forEach((ts, ci) => {
+    const age = (Date.now() - ts) / 600;
+    if (age > 1) { captureFlash.delete(ci); return; }
+    const c = ci % GRID, r = Math.floor(ci / GRID);
+    const {x,y} = gridToCanvas(c,r);
+    const owner = enclosedBy[ci];
+    const col = owner === 'O' ? '0,229,255' : '255,77,109';
+    ctx.fillStyle = `rgba(${col},${0.4 * (1-age)})`;
+    ctx.beginPath(); ctx.arc(x,y,CELL*0.8*(1-age*0.5),0,Math.PI*2); ctx.fill();
+  });
+
+  // ── Not-your-turn dim
+  if (!gameOver && mySymbol && turn !== mySymbol) {
+    ctx.fillStyle = 'rgba(8,8,16,0.18)';
     ctx.fillRect(0, 0, W, H);
   }
 }
@@ -868,34 +942,68 @@ function drawConnections() {
         const ni = idx(nc,nr);
         if (board[ni]!==piece || enclosed[ni]) return;
         const {x:x2,y:y2} = gridToCanvas(nc,nr);
-        const color = piece==='O'?'#00e5ff':'#ff4d6d';
-        ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.globalAlpha=0.4;
-        ctx.shadowColor=color; ctx.shadowBlur=6;
+        const isO = piece === 'O';
+        const pulse = 0.3 + 0.15 * Math.sin(pulseT + c*0.4 + r*0.4);
+        ctx.strokeStyle = isO ? `rgba(0,229,255,${pulse})` : `rgba(255,77,109,${pulse})`;
+        ctx.lineWidth = 0.8;
+        ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-        ctx.shadowBlur=0; ctx.globalAlpha=1;
       });
     }
   }
 }
 
-function drawPiece(type, x, y, isEnclosed) {
-  const isO  = type === 'O';
-  const color = isO ? '#00e5ff' : '#ff4d6d';
-  const r = CELL * 0.32;
-  ctx.globalAlpha = isEnclosed ? 0.3 : 1;
-  if (!isEnclosed) { ctx.shadowColor=color; ctx.shadowBlur=12; }
-  if (isO) {
-    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
-    ctx.strokeStyle=color; ctx.lineWidth=isEnclosed?1.5:2.5; ctx.stroke();
-    ctx.beginPath(); ctx.arc(x,y,r*0.25,0,Math.PI*2);
-    ctx.fillStyle=color; ctx.fill();
-  } else {
-    ctx.strokeStyle=color; ctx.lineWidth=isEnclosed?1.5:2.5; ctx.lineCap='round';
-    ctx.beginPath(); ctx.moveTo(x-r,y-r); ctx.lineTo(x+r,y+r); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x+r,y-r); ctx.lineTo(x-r,y+r); ctx.stroke();
+function drawPiece(type, x, y, isEnclosed, pieceIdx) {
+  const isO = type === 'O';
+  const col  = isO ? '0,229,255' : '255,77,109';
+  const r    = CELL * 0.28;
+
+  // Drop-in animation
+  let scale = 1;
+  if (newPieces.has(pieceIdx)) {
+    const age = (Date.now() - newPieces.get(pieceIdx)) / 250;
+    if (age < 1) {
+      scale = 0.3 + 0.7 * (1 - Math.pow(1 - age, 3));
+    } else {
+      newPieces.delete(pieceIdx);
+    }
   }
-  ctx.shadowBlur=0; ctx.globalAlpha=1;
+
+  const alpha = isEnclosed ? 0.22 : 1;
+  const pulseMult = isEnclosed ? 1 : (1 + 0.08 * Math.sin(pulseT + x * 0.05 + y * 0.05));
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = alpha;
+
+  if (!isEnclosed) {
+    ctx.shadowColor = `rgba(${col},0.9)`;
+    ctx.shadowBlur  = 8 * pulseMult;
+  }
+
+  if (isO) {
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(${col},1)`;
+    ctx.lineWidth = isEnclosed ? 0.8 : 1.5;
+    ctx.stroke();
+    // Inner dot
+    ctx.beginPath(); ctx.arc(0, 0, r*0.22, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${col},${isEnclosed?0.4:1})`;
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = `rgba(${col},1)`;
+    ctx.lineWidth = isEnclosed ? 0.8 : 1.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-r,-r); ctx.lineTo(r,r); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(r,-r); ctx.lineTo(-r,r); ctx.stroke();
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
+
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 function updateUI() {
