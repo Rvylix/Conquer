@@ -501,60 +501,75 @@ function joinRoom() {
   isHost   = false;
   mySymbol = 'X';
 
-  subscribeToRoom();
+  // Show lobby waiting state
+  document.getElementById('join-error').style.display = 'none';
+  showJoinError('Connecting...');
 
-  // Tell host we joined
-  setTimeout(() => {
-    broadcast({ type: 'PLAYER_JOINED', gridSize: lobbyGridSize });
-  }, 800); // slight delay to ensure subscription is ready
+  subscribeToRoom();
 }
 
 function showJoinError(msg) {
   const el = document.getElementById('join-error');
   el.textContent = msg;
   el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', 3000);
 }
 
 // ─── REALTIME CHANNEL ────────────────────────────────────────────────────────
 function subscribeToRoom() {
-  channel = supabase.channel('conquest-' + roomCode, {
-    config: { broadcast: { self: false } }
+  // Tear down any existing channel first
+  if (channel) { supabase.removeChannel(channel); channel = null; }
+
+  channel = supabase.channel('conquest:' + roomCode, {
+    config: {
+      broadcast: { self: false, ack: false }
+    }
   });
 
   channel.on('broadcast', { event: 'game' }, ({ payload }) => {
+    console.log('[RX]', payload.type, payload);
     handleMessage(payload);
   });
 
-  channel.subscribe((status) => {
+  channel.subscribe((status, err) => {
+    console.log('[CHANNEL]', status, err || '');
+    setConn(status === 'SUBSCRIBED');
+
     if (status === 'SUBSCRIBED') {
-      setConn(true);
       if (!isHost) {
-        // Guest: show game screen, then ping host repeatedly until response
-        showGame();
+        // Guest subscribed — start pinging host
+        showJoinError('Connected! Waiting for host...');
         pingHost();
+      } else {
+        // Host subscribed — update waiting text
+        document.querySelector('.waiting-pulse').textContent = 'Waiting for opponent...';
       }
+    }
+
+    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      showJoinError('Connection failed: ' + status);
     }
   });
 }
 
-// Guest pings host every second until host responds with GAME_START
+// Guest pings host every 1.5s until host responds with GAME_START
 let pingInterval = null;
 function pingHost() {
+  clearInterval(pingInterval);
   let attempts = 0;
   pingInterval = setInterval(() => {
     attempts++;
+    console.log('[PING] attempt', attempts);
     broadcast({ type: 'PLAYER_JOINED', gridSize: lobbyGridSize });
-    // Stop after 30 attempts (30 seconds)
-    if (attempts >= 30) {
+    if (attempts >= 20) {
       clearInterval(pingInterval);
-      document.getElementById('status').textContent = 'Could not reach host. Check the code and try again.';
+      showJoinError('No response from host. Is the code correct?');
     }
-  }, 1000);
+  }, 1500);
 }
 
 function broadcast(payload) {
-  if (!channel) return;
+  if (!channel) { console.warn('broadcast: no channel'); return; }
+  console.log('[TX]', payload.type, payload);
   channel.send({ type: 'broadcast', event: 'game', payload });
 }
 
@@ -563,20 +578,23 @@ function handleMessage(msg) {
   switch (msg.type) {
 
     case 'PLAYER_JOINED':
-      // Host receives this — only act on the first one
       if (isHost && !opponentIn) {
         opponentIn = true;
         GRID = msg.gridSize || lobbyGridSize;
         initGame();
         showGame();
-        broadcastState('GAME_START');
+        initCanvas();
+        draw();
+        updateUI();
+        // Small delay to ensure host canvas is ready before broadcasting
+        setTimeout(() => broadcastState('GAME_START'), 200);
       }
       break;
 
     case 'GAME_START':
-      // Guest receives initial state from host — stop pinging
+      // Guest receives initial state from host — stop pinging, show game
       if (!isHost) {
-        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+        clearInterval(pingInterval); pingInterval = null;
         GRID       = msg.grid;
         board      = msg.board;
         enclosed   = msg.enclosed;
@@ -584,6 +602,7 @@ function handleMessage(msg) {
         scores     = msg.scores;
         turn       = msg.turn;
         gameOver   = msg.gameOver;
+        showGame();   // show game screen NOW (after we have state)
         initCanvas();
         draw();
         updateUI();
@@ -634,20 +653,6 @@ function showGame() {
   const g = document.getElementById('game');
   g.classList.add('visible');
   document.getElementById('room-label').textContent = 'ROOM: ' + roomCode;
-
-  // Mark which card is "you"
-  const myCard = document.getElementById('card-' + mySymbol);
-  const badge = document.createElement('div');
-  badge.className = 'you-badge';
-  badge.textContent = 'YOU';
-  myCard.appendChild(badge);
-
-  if (isHost) {
-    // Host already called initGame, just draw
-    initCanvas();
-    draw();
-    updateUI();
-  }
 }
 
 function leaveGame() {
@@ -902,7 +907,7 @@ function updateUI() {
   cardO.className = `player-card p-O${turn==='O'?' active-O':''}`;
   cardX.className = `player-card p-X${turn==='X'?' active-X':''}`;
 
-  // Re-add YOU badge
+  // YOU badge
   document.querySelectorAll('.you-badge').forEach(b => b.remove());
   if (mySymbol) {
     const badge = document.createElement('div');
