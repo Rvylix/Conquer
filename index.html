@@ -253,7 +253,7 @@
     background: radial-gradient(ellipse at 50% 50%, #0d1a3a18 0%, transparent 70%);
     pointer-events: none;
   }
-  canvas { display: block; cursor: crosshair; }
+  canvas { display: block; cursor: crosshair; image-rendering: crisp-edges; max-width: 100%; }
   canvas.not-your-turn { cursor: not-allowed; }
 
   /* ── CONTROLS ── */
@@ -689,9 +689,15 @@ function initGame() {
 function initCanvas() {
   canvas = document.getElementById('canvas');
   ctx    = canvas.getContext('2d');
+  const dpr  = window.devicePixelRatio || 1;
   const size = (GRID - 1) * CELL;
-  canvas.width  = size + CELL * 1.5;
-  canvas.height = size + CELL * 1.5;
+  const W    = size + CELL * 1.5;
+  const H    = size + CELL * 1.5;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
   canvas.onclick = handleClick;
   newPieces.clear();
   captureFlash.clear();
@@ -732,8 +738,8 @@ function handleClick(e) {
   if (turn !== mySymbol) return;  // not your turn
 
   const rect = canvas.getBoundingClientRect();
-  const px = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const py = (e.clientY - rect.top)  * (canvas.height / rect.height);
+  const px = (e.clientX - rect.left);
+  const py = (e.clientY - rect.top);
   const {col, row} = canvasToGrid(px, py);
 
   if (!valid(col, row)) return;
@@ -842,7 +848,8 @@ function stopRenderLoop() {
 // ─── DRAW ─────────────────────────────────────────────────────────────────────
 function draw() {
   if (!canvas || !ctx) return;
-  const W = canvas.width, H = canvas.height;
+  const W = parseFloat(canvas.style.width)  || canvas.width;
+  const H = parseFloat(canvas.style.height) || canvas.height;
   ctx.clearRect(0, 0, W, H);
 
   // ── Background
@@ -873,11 +880,11 @@ function draw() {
     }
   }
 
-  // ── Grid lines — visible but thin
+  // ── Grid lines — clearly visible
   for (let i = 0; i < GRID; i++) {
-    const alpha = 0.35 + 0.08 * Math.sin(pulseT * 0.4 + i * 0.25);
-    ctx.strokeStyle = `rgba(60,70,140,${alpha})`;
-    ctx.lineWidth = 0.4;
+    const alpha = 0.55 + 0.1 * Math.sin(pulseT * 0.4 + i * 0.25);
+    ctx.strokeStyle = `rgba(80,100,180,${alpha})`;
+    ctx.lineWidth = 0.6;
     const {x:x0,y:y0} = gridToCanvas(i,0);
     const {x:x1,y:y1} = gridToCanvas(i,GRID-1);
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
@@ -887,12 +894,12 @@ function draw() {
   }
 
   // ── Intersection dots
-  ctx.fillStyle = 'rgba(80,100,200,0.5)';
+  ctx.fillStyle = 'rgba(120,140,255,0.7)';
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       if (board[idx(c,r)]) continue;
       const {x,y} = gridToCanvas(c,r);
-      ctx.beginPath(); ctx.arc(x,y,1,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x,y,1.2,0,Math.PI*2); ctx.fill();
     }
   }
 
@@ -1055,16 +1062,13 @@ function endGame() {
 function showGainEffect(col, row, count, player) {
   if (!canvas) return;
   const wrapper = document.getElementById('grid-wrapper');
-  const rect    = canvas.getBoundingClientRect();
-  const scaleX  = canvas.width  / rect.width;
-  const scaleY  = canvas.height / rect.height;
-  const {x,y}   = gridToCanvas(col, row);
+  const {x, y}  = gridToCanvas(col, row);
   const el = document.createElement('div');
   el.className   = 'captured-notice';
   el.textContent = `+${count}`;
   el.style.color = player==='O'?'#00e5ff':'#ff4d6d';
-  el.style.left  = (x/scaleX+20)+'px';
-  el.style.top   = (y/scaleY+20)+'px';
+  el.style.left  = (x + 20) + 'px';
+  el.style.top   = (y + 20) + 'px';
   wrapper.appendChild(el);
   setTimeout(()=>el.remove(), 1500);
 }
