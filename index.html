@@ -814,82 +814,212 @@ function doAIMove() {
   aiThinking = true;
   updateUI();
 
-  const move = pickAIMove();
-  if (move === null) { gameOver = true; endGame(); return; }
+  // Run AI in a setTimeout so the UI updates first (shows "AI thinking...")
+  setTimeout(() => {
+    const move = pickAIMove();
+    if (move === null) { gameOver = true; endGame(); return; }
 
-  const [col, row] = move;
-  const i = idx(col, row);
-  board[i] = 'X';
+    const [col, row] = move;
+    const i = idx(col, row);
+    board[i] = 'X';
 
-  const newTerritory = findNewlyEnclosed('X');
-  let gained = 0;
-  newTerritory.forEach(ci => {
-    if (!enclosed[ci]) {
-      enclosed[ci]   = true;
-      enclosedBy[ci] = 'X';
-      gained++;
+    const newTerritory = findNewlyEnclosed('X');
+    let gained = 0;
+    newTerritory.forEach(ci => {
+      if (!enclosed[ci]) {
+        enclosed[ci]   = true;
+        enclosedBy[ci] = 'X';
+        gained++;
+      }
+    });
+    if (gained > 0) {
+      scores['X'] += gained;
+      showGainEffect(col, row, gained, 'X');
     }
-  });
-  if (gained > 0) {
-    scores['X'] += gained;
-    showGainEffect(col, row, gained, 'X');
-  }
 
-  const hasMoves = board.some((cell, i) => cell === null && !enclosed[i]);
-  if (!hasMoves) gameOver = true;
+    const hasMoves = board.some((cell, j) => cell === null && !enclosed[j]);
+    if (!hasMoves) gameOver = true;
 
-  turn = 'O';
-  aiThinking = false;
-  draw();
-  updateUI();
-  if (gameOver) endGame();
+    turn = 'O';
+    aiThinking = false;
+    draw();
+    updateUI();
+    if (gameOver) endGame();
+  }, aiDifficulty === 'hard' ? 300 : 150);
 }
 
-// Returns [col, row] for best AI move based on difficulty
+// ─── MOVE PICKER ─────────────────────────────────────────────────────────────
 function pickAIMove() {
   const free = getFreeCell();
   if (!free.length) return null;
 
-  if (aiDifficulty === 'easy') {
-    // 20% chance to try a smart move, otherwise random
-    if (Math.random() < 0.2) {
-      const smart = findCapturingMove('X') || findCapturingMove('O');
-      if (smart) return smart;
-    }
-    return free[Math.floor(Math.random() * free.length)];
-  }
-
-  if (aiDifficulty === 'medium') {
-    // 1. Take any move that scores immediately
-    const score = findCapturingMove('X');
-    if (score) return score;
-    // 2. Block player if they're 1 move from scoring
-    const block = findCapturingMove('O');
-    if (block) return block;
-    // 3. Random
-    return free[Math.floor(Math.random() * free.length)];
-  }
-
-  if (aiDifficulty === 'hard') {
-    // 1. Take best scoring move (most points gained)
-    const bestScore = findBestCapturingMove('X');
-    if (bestScore) return bestScore;
-    // 2. Block best player scoring move
-    const bestBlock = findBestCapturingMove('O');
-    if (bestBlock) return bestBlock;
-    // 3. Try to extend existing chains (build toward enclosure)
-    const chain = findChainExtension('X');
-    if (chain) return chain;
-    // 4. Fallback: pick a cell near existing X pieces
-    const near = findNearbyMove('X');
-    if (near) return near;
-    return free[Math.floor(Math.random() * free.length)];
-  }
-
+  if (aiDifficulty === 'easy')   return easyMove(free);
+  if (aiDifficulty === 'medium') return mediumMove(free);
+  if (aiDifficulty === 'hard')   return hardMove(free);
   return free[Math.floor(Math.random() * free.length)];
 }
 
-// Get all free (non-enclosed, empty) cells
+// EASY: mostly random, rare opportunistic capture
+function easyMove(free) {
+  if (Math.random() < 0.15) {
+    const m = bestScoringMove('X', free);
+    if (m && m.score > 0) return m.pos;
+  }
+  return free[Math.floor(Math.random() * free.length)];
+}
+
+// MEDIUM: take captures, block obvious threats, else random
+function mediumMove(free) {
+  const attack = bestScoringMove('X', free);
+  if (attack && attack.score > 0) return attack.pos;
+  const defend = bestScoringMove('O', free);
+  if (defend && defend.score > 0) return defend.pos;
+  // Prefer cells adjacent to own pieces over totally random
+  const near = adjacentTo('X', free);
+  return near || free[Math.floor(Math.random() * free.length)];
+}
+
+// HARD: full scored evaluation with 2-move lookahead
+function hardMove(free) {
+  // Sample moves for performance on large grids (max 120 candidates)
+  const candidates = sampleCandidates(free, 'X', 120);
+  let bestPos = null, bestVal = -Infinity;
+
+  for (const [c, r] of candidates) {
+    const val = evaluateMove(c, r, 'X', 2);
+    if (val > bestVal) { bestVal = val; bestPos = [c, r]; }
+  }
+
+  return bestPos || free[Math.floor(Math.random() * free.length)];
+}
+
+// Score a move at (c,r) for `player` with `depth` lookahead
+// Returns a value: higher = better for AI ('X')
+function evaluateMove(c, r, player, depth) {
+  const i = idx(c, r);
+  if (board[i] !== null || enclosed[i]) return -Infinity;
+
+  // Simulate placement
+  board[i] = player;
+  const captured = findNewlyEnclosed(player);
+  let score = 0;
+
+  // Immediate capture value
+  score += captured.length * 10;
+
+  // Apply captures temporarily
+  const tempEnclosed = [];
+  captured.forEach(ci => {
+    if (!enclosed[ci]) { enclosed[ci] = true; enclosedBy[ci] = player; tempEnclosed.push(ci); }
+  });
+
+  // Bonus: how many opponent pieces are now orthogonally squeezed (close to capture)
+  score += countThreatened('X') * 0.8;
+
+  // Penalty: how much we're enabling opponent's next capture
+  score -= countThreatened('O') * 1.2;
+
+  // Chain building bonus: reward adjacency to own pieces
+  score += countAdjacent(c, r, player) * 1.5;
+
+  // Lookahead: simulate best opponent response then best AI follow-up
+  if (depth > 0 && captured.length === 0) {
+    // Opponent's best response
+    const oppFree = getFreeCell();
+    const oppSample = sampleCandidates(oppFree, 'O', 30);
+    let oppBest = 0;
+    for (const [oc, or] of oppSample) {
+      board[idx(oc,or)] = 'O';
+      const oppGain = findNewlyEnclosed('O').length;
+      board[idx(oc,or)] = null;
+      if (oppGain > oppBest) oppBest = oppGain;
+    }
+    score -= oppBest * 8; // penalize if opponent can score next
+
+    // AI follow-up after opponent's best
+    if (depth > 1) {
+      const nextFree = getFreeCell();
+      const nextSample = sampleCandidates(nextFree, 'X', 20);
+      let nextBest = 0;
+      for (const [nc, nr] of nextSample) {
+        board[idx(nc,nr)] = 'X';
+        const nextGain = findNewlyEnclosed('X').length;
+        board[idx(nc,nr)] = null;
+        if (nextGain > nextBest) nextBest = nextGain;
+      }
+      score += nextBest * 5;
+    }
+  }
+
+  // Undo temporary captures
+  tempEnclosed.forEach(ci => { enclosed[ci] = false; enclosedBy[ci] = null; });
+  board[i] = null;
+
+  return score;
+}
+
+// Count enemy pieces that have only 1 orthogonal freedom left (close to capture)
+function countThreatened(enemy) {
+  const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]];
+  let count = 0;
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (board[idx(c,r)] !== enemy || enclosed[idx(c,r)]) continue;
+      let freedoms = 0;
+      for (const [dc,dr] of DIRS4) {
+        const nc=c+dc, nr=r+dr;
+        if (!valid(nc,nr)) continue;
+        if (board[idx(nc,nr)] === null && !enclosed[idx(nc,nr)]) freedoms++;
+      }
+      if (freedoms <= 1) count++;
+    }
+  }
+  return count;
+}
+
+// Count how many of player's own pieces are adjacent (8-dir) to (c,r)
+function countAdjacent(c, r, player) {
+  const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  let count = 0;
+  for (const [dc,dr] of DIRS8) {
+    const nc=c+dc, nr=r+dr;
+    if (valid(nc,nr) && board[idx(nc,nr)] === player && !enclosed[idx(nc,nr)]) count++;
+  }
+  return count;
+}
+
+// Smart candidate sampling: prioritize cells near existing pieces + some random
+function sampleCandidates(free, player, maxN) {
+  if (free.length <= maxN) return free;
+
+  // Score each free cell by proximity to existing pieces
+  const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  const scored = free.map(([c,r]) => {
+    let adj = 0;
+    for (const [dc,dr] of DIRS8) {
+      const nc=c+dc, nr=r+dr;
+      if (valid(nc,nr) && board[idx(nc,nr)] !== null && !enclosed[idx(nc,nr)]) adj++;
+    }
+    return { pos:[c,r], adj };
+  });
+
+  // Sort by adjacency descending, take top 70% + 30% random
+  scored.sort((a,b) => b.adj - a.adj);
+  const topN   = Math.floor(maxN * 0.7);
+  const randN  = maxN - topN;
+  const top    = scored.slice(0, topN).map(s => s.pos);
+  const rest   = scored.slice(topN);
+  const random = [];
+  for (let i = 0; i < Math.min(randN, rest.length); i++) {
+    const j = Math.floor(Math.random() * rest.length);
+    random.push(rest.splice(j, 1)[0].pos);
+  }
+  return [...top, ...random];
+}
+
+// ─── SHARED AI HELPERS ────────────────────────────────────────────────────────
+
+// Get all free cells
 function getFreeCell() {
   const cells = [];
   for (let r = 0; r < GRID; r++)
@@ -899,71 +1029,31 @@ function getFreeCell() {
   return cells;
 }
 
-// Find any move that immediately captures at least 1 enemy piece for `player`
-function findCapturingMove(player) {
-  const free = getFreeCell();
-  // Shuffle for variety
-  for (let i = free.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i+1));
-    [free[i], free[j]] = [free[j], free[i]];
-  }
-  for (const [c, r] of free) {
-    board[idx(c,r)] = player;
-    const gained = findNewlyEnclosed(player).length;
-    board[idx(c,r)] = null;
-    if (gained > 0) return [c, r];
-  }
-  return null;
-}
-
-// Find the move that captures the MOST enemy pieces for `player`
-function findBestCapturingMove(player) {
-  const free = getFreeCell();
+// Find best scoring move for player — returns { pos, score } or null
+function bestScoringMove(player, free) {
   let best = null, bestScore = 0;
   for (const [c, r] of free) {
     board[idx(c,r)] = player;
     const gained = findNewlyEnclosed(player).length;
     board[idx(c,r)] = null;
-    if (gained > bestScore) { bestScore = gained; best = [c, r]; }
+    if (gained > bestScore) { bestScore = gained; best = { pos:[c,r], score:gained }; }
   }
-  return bestScore > 0 ? best : null;
+  return best;
 }
 
-// Find a move that extends an existing chain of `player` pieces (for Hard AI)
-// Prefers cells adjacent to existing pieces that don't complete player's own enclosure
-function findChainExtension(player) {
-  const free = getFreeCell();
-  const candidates = [];
+// Find a random free cell adjacent to player's existing pieces
+function adjacentTo(player, free) {
   const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-  for (const [c, r] of free) {
-    let adjCount = 0;
-    for (const [dc, dr] of DIRS8) {
-      const nc = c+dc, nr = r+dr;
-      if (valid(nc,nr) && board[idx(nc,nr)] === player && !enclosed[idx(nc,nr)])
-        adjCount++;
-    }
-    if (adjCount >= 1) candidates.push({ pos: [c,r], adj: adjCount });
-  }
-  if (!candidates.length) return null;
-  // Pick one with most adjacency, with some randomness
-  candidates.sort((a,b) => b.adj - a.adj);
-  const top = candidates.slice(0, Math.max(1, Math.floor(candidates.length * 0.3)));
-  return top[Math.floor(Math.random() * top.length)].pos;
-}
-
-// Find a move near existing pieces (fallback for Hard)
-function findNearbyMove(player) {
-  const free = getFreeCell();
-  const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-  const nearby = free.filter(([c,r]) =>
+  const near = free.filter(([c,r]) =>
     DIRS8.some(([dc,dr]) => {
       const nc=c+dc, nr=r+dr;
-      return valid(nc,nr) && board[idx(nc,nr)] === player;
+      return valid(nc,nr) && board[idx(nc,nr)] === player && !enclosed[idx(nc,nr)];
     })
   );
-  if (!nearby.length) return null;
-  return nearby[Math.floor(Math.random() * nearby.length)];
+  if (!near.length) return null;
+  return near[Math.floor(Math.random() * near.length)];
 }
+
 
 // ─── TERRITORY DETECTION ──────────────────────────────────────────────────────
 function findNewlyEnclosed(player) {
