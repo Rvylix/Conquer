@@ -459,10 +459,6 @@ window.onload = () => {
   const s = document.createElement('script');
   s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
   s.onload = () => {
-    if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-      console.warn('Supabase not configured yet.');
-      return;
-    }
     supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   };
   document.head.appendChild(s);
@@ -485,7 +481,6 @@ function genCode() {
 
 // ─── CREATE ROOM ─────────────────────────────────────────────────────────────
 function createRoom() {
-  if (!supabase) { alert('Supabase not configured. Add your URL and KEY to the script.'); return; }
   roomCode = genCode();
   isHost   = true;
   mySymbol = 'O';
@@ -499,7 +494,6 @@ function createRoom() {
 
 // ─── JOIN ROOM ────────────────────────────────────────────────────────────────
 function joinRoom() {
-  if (!supabase) { alert('Supabase not configured. Add your URL and KEY to the script.'); return; }
   const code = document.getElementById('join-code-input').value.trim().toUpperCase();
   if (code.length !== 6) { showJoinError('Code must be 6 characters'); return; }
 
