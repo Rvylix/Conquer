@@ -530,11 +530,27 @@ function subscribeToRoom() {
     if (status === 'SUBSCRIBED') {
       setConn(true);
       if (!isHost) {
-        // Guest: show game immediately, wait for host to send state
+        // Guest: show game screen, then ping host repeatedly until response
         showGame();
+        pingHost();
       }
     }
   });
+}
+
+// Guest pings host every second until host responds with GAME_START
+let pingInterval = null;
+function pingHost() {
+  let attempts = 0;
+  pingInterval = setInterval(() => {
+    attempts++;
+    broadcast({ type: 'PLAYER_JOINED', gridSize: lobbyGridSize });
+    // Stop after 30 attempts (30 seconds)
+    if (attempts >= 30) {
+      clearInterval(pingInterval);
+      document.getElementById('status').textContent = 'Could not reach host. Check the code and try again.';
+    }
+  }, 1000);
 }
 
 function broadcast(payload) {
@@ -547,8 +563,8 @@ function handleMessage(msg) {
   switch (msg.type) {
 
     case 'PLAYER_JOINED':
-      // Host receives this — start the game and send initial state
-      if (isHost) {
+      // Host receives this — only act on the first one
+      if (isHost && !opponentIn) {
         opponentIn = true;
         GRID = msg.gridSize || lobbyGridSize;
         initGame();
@@ -558,8 +574,9 @@ function handleMessage(msg) {
       break;
 
     case 'GAME_START':
-      // Guest receives initial state from host
+      // Guest receives initial state from host — stop pinging
       if (!isHost) {
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
         GRID       = msg.grid;
         board      = msg.board;
         enclosed   = msg.enclosed;
@@ -574,7 +591,6 @@ function handleMessage(msg) {
       break;
 
     case 'MOVE':
-      // Opponent placed a piece — apply it
       board      = msg.board;
       enclosed   = msg.enclosed;
       enclosedBy = msg.enclosedBy;
@@ -584,6 +600,7 @@ function handleMessage(msg) {
       draw();
       updateUI();
       if (msg.gained > 0) showGainEffect(msg.col, msg.row, msg.gained, msg.player);
+      if (gameOver) endGame();
       break;
 
     case 'RESET':
