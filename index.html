@@ -432,8 +432,8 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // ════════════════════════════════════════════════════════════════════════════
 
 // ─── SUPABASE CLIENT (loaded via CDN) ────────────────────────────────────────
-let supabase = null;
-let channel  = null;
+let sbClient  = null;
+let channel   = null;
 
 // ─── MULTIPLAYER STATE ───────────────────────────────────────────────────────
 let mySymbol    = null;   // 'O' or 'X' — assigned when joining
@@ -459,7 +459,7 @@ window.onload = () => {
   const s = document.createElement('script');
   s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
   s.onload = () => {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   };
   document.head.appendChild(s);
 };
@@ -517,9 +517,9 @@ function showJoinError(msg) {
 // ─── REALTIME CHANNEL ────────────────────────────────────────────────────────
 function subscribeToRoom() {
   // Tear down any existing channel first
-  if (channel) { supabase.removeChannel(channel); channel = null; }
+  if (channel) { sbClient.removeChannel(channel); channel = null; }
 
-  channel = supabase.channel('conquest:' + roomCode, {
+  channel = sbClient.channel('conquest:' + roomCode, {
     config: {
       broadcast: { self: false, ack: false }
     }
