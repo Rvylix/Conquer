@@ -689,15 +689,13 @@ function initGame() {
 function initCanvas() {
   canvas = document.getElementById('canvas');
   ctx    = canvas.getContext('2d');
-  const dpr  = window.devicePixelRatio || 1;
   const size = (GRID - 1) * CELL;
-  const W    = size + CELL * 1.5;
-  const H    = size + CELL * 1.5;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width  = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx.scale(dpr, dpr);
+  const W = size + Math.round(CELL * 1.5);
+  const H = size + Math.round(CELL * 1.5);
+  canvas.width  = W;
+  canvas.height = H;
+  canvas.style.width  = '';
+  canvas.style.height = '';
   canvas.onclick = handleClick;
   newPieces.clear();
   captureFlash.clear();
@@ -738,8 +736,10 @@ function handleClick(e) {
   if (turn !== mySymbol) return;  // not your turn
 
   const rect = canvas.getBoundingClientRect();
-  const px = (e.clientX - rect.left);
-  const py = (e.clientY - rect.top);
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const px = (e.clientX - rect.left) * scaleX;
+  const py = (e.clientY - rect.top)  * scaleY;
   const {col, row} = canvasToGrid(px, py);
 
   if (!valid(col, row)) return;
@@ -848,8 +848,8 @@ function stopRenderLoop() {
 // ─── DRAW ─────────────────────────────────────────────────────────────────────
 function draw() {
   if (!canvas || !ctx) return;
-  const W = parseFloat(canvas.style.width)  || canvas.width;
-  const H = parseFloat(canvas.style.height) || canvas.height;
+  const W = canvas.width;
+  const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
   // ── Background
@@ -992,15 +992,14 @@ function drawPiece(type, x, y, isEnclosed, pieceIdx) {
   if (isO) {
     ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
     ctx.strokeStyle = `rgba(${col},1)`;
-    ctx.lineWidth = isEnclosed ? 0.8 : 1.5;
+    ctx.lineWidth = isEnclosed ? 1 : 2;
     ctx.stroke();
-    // Inner dot
-    ctx.beginPath(); ctx.arc(0, 0, r*0.22, 0, Math.PI*2);
+    ctx.beginPath(); ctx.arc(0, 0, r*0.25, 0, Math.PI*2);
     ctx.fillStyle = `rgba(${col},${isEnclosed?0.4:1})`;
     ctx.fill();
   } else {
     ctx.strokeStyle = `rgba(${col},1)`;
-    ctx.lineWidth = isEnclosed ? 0.8 : 1.5;
+    ctx.lineWidth = isEnclosed ? 1 : 2;
     ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(-r,-r); ctx.lineTo(r,r); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(r,-r); ctx.lineTo(-r,r); ctx.stroke();
