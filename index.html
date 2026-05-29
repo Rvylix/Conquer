@@ -846,14 +846,14 @@ function draw() {
   ctx.clearRect(0, 0, W, H);
 
   // ── Background
-  ctx.fillStyle = '#080810';
+  ctx.fillStyle = '#0a0b14';
   ctx.fillRect(0, 0, W, H);
 
   // ── Animated scan line
   ctx.save();
-  const scanGrad = ctx.createLinearGradient(0, scanOffset - CELL, 0, scanOffset + CELL);
+  const scanGrad = ctx.createLinearGradient(0, scanOffset - CELL*2, 0, scanOffset + CELL*2);
   scanGrad.addColorStop(0, 'transparent');
-  scanGrad.addColorStop(0.5, '#ffffff04');
+  scanGrad.addColorStop(0.5, 'rgba(255,255,255,0.025)');
   scanGrad.addColorStop(1, 'transparent');
   ctx.fillStyle = scanGrad;
   ctx.fillRect(0, 0, W, H);
@@ -865,7 +865,7 @@ function draw() {
       const i = idx(c, r);
       if (!enclosed[i]) continue;
       const {x, y} = gridToCanvas(c, r);
-      const pulse = 0.04 + 0.02 * Math.sin(pulseT + c * 0.3 + r * 0.3);
+      const pulse = 0.07 + 0.03 * Math.sin(pulseT + c * 0.3 + r * 0.3);
       ctx.fillStyle = enclosedBy[i] === 'O'
         ? `rgba(0,229,255,${pulse})`
         : `rgba(255,77,109,${pulse})`;
@@ -873,11 +873,11 @@ function draw() {
     }
   }
 
-  // ── Grid lines (ultra thin)
-  ctx.lineWidth = 0.3;
+  // ── Grid lines — visible but thin
   for (let i = 0; i < GRID; i++) {
-    const alpha = 0.12 + 0.04 * Math.sin(pulseT * 0.5 + i * 0.2);
-    ctx.strokeStyle = `rgba(100,110,200,${alpha})`;
+    const alpha = 0.35 + 0.08 * Math.sin(pulseT * 0.4 + i * 0.25);
+    ctx.strokeStyle = `rgba(60,70,140,${alpha})`;
+    ctx.lineWidth = 0.4;
     const {x:x0,y:y0} = gridToCanvas(i,0);
     const {x:x1,y:y1} = gridToCanvas(i,GRID-1);
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
@@ -886,13 +886,13 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
 
-  // ── Intersection dots (faint)
+  // ── Intersection dots
+  ctx.fillStyle = 'rgba(80,100,200,0.5)';
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       if (board[idx(c,r)]) continue;
       const {x,y} = gridToCanvas(c,r);
-      ctx.fillStyle = 'rgba(80,90,160,0.25)';
-      ctx.beginPath(); ctx.arc(x,y,0.8,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x,y,1,0,Math.PI*2); ctx.fill();
     }
   }
 
@@ -943,9 +943,9 @@ function drawConnections() {
         if (board[ni]!==piece || enclosed[ni]) return;
         const {x:x2,y:y2} = gridToCanvas(nc,nr);
         const isO = piece === 'O';
-        const pulse = 0.3 + 0.15 * Math.sin(pulseT + c*0.4 + r*0.4);
+        const pulse = 0.55 + 0.2 * Math.sin(pulseT + c*0.4 + r*0.4);
         ctx.strokeStyle = isO ? `rgba(0,229,255,${pulse})` : `rgba(255,77,109,${pulse})`;
-        ctx.lineWidth = 0.8;
+        ctx.lineWidth = 1.2;
         ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
       });
@@ -956,7 +956,7 @@ function drawConnections() {
 function drawPiece(type, x, y, isEnclosed, pieceIdx) {
   const isO = type === 'O';
   const col  = isO ? '0,229,255' : '255,77,109';
-  const r    = CELL * 0.28;
+  const r    = CELL * 0.32;
 
   // Drop-in animation
   let scale = 1;
@@ -978,8 +978,8 @@ function drawPiece(type, x, y, isEnclosed, pieceIdx) {
   ctx.globalAlpha = alpha;
 
   if (!isEnclosed) {
-    ctx.shadowColor = `rgba(${col},0.9)`;
-    ctx.shadowBlur  = 8 * pulseMult;
+    ctx.shadowColor = `rgba(${col},1)`;
+    ctx.shadowBlur  = 14 * pulseMult;
   }
 
   if (isO) {
