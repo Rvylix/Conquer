@@ -724,6 +724,8 @@ function startAI() {
   draw();
   updateUI();
 }
+
+function setSize(n) {
   GRID = n;
   document.querySelectorAll('[id^="btn-"]').forEach(b => b.classList.remove('selected'));
   document.getElementById('btn-' + n).classList.add('selected');
