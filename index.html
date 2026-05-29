@@ -355,7 +355,20 @@
 
     <div class="divider">OR</div>
 
-    <!-- Join -->
+    <!-- VS AI -->
+    <div class="lobby-card">
+      <h2>// PLAY VS AI</h2>
+      <p>Play solo against the computer.</p>
+      <div class="config-row" style="margin-bottom:4px;">
+        <span>DIFFICULTY:</span>
+        <button onclick="setDifficulty('easy')"   id="dbtn-easy"   class="selected">EASY</button>
+        <button onclick="setDifficulty('medium')" id="dbtn-medium">MEDIUM</button>
+        <button onclick="setDifficulty('hard')"   id="dbtn-hard">HARD</button>
+      </div>
+      <button class="primary" onclick="startAI()">PLAY VS AI</button>
+    </div>
+
+    <div class="divider">OR</div>
     <div class="lobby-card">
       <h2>// JOIN ROOM</h2>
       <p>Enter the 6-digit code your opponent shared with you.</p>
@@ -456,7 +469,10 @@ let scores   = { O: 0, X: 0 };
 let gameOver = false;
 let canvas, ctx;
 
-// ─── BOOT ────────────────────────────────────────────────────────────────────
+// ─── AI STATE ────────────────────────────────────────────────────────────────
+let isAIMode    = false;
+let aiDifficulty = 'easy';  // 'easy' | 'medium' | 'hard'
+let aiThinking  = false;
 window.onload = () => {
   // Dynamically load Supabase CDN
   const s = document.createElement('script');
@@ -660,6 +676,8 @@ function showGame() {
 
 function leaveGame() {
   if (channel) channel.unsubscribe();
+  isAIMode = false;
+  aiThinking = false;
   location.reload();
 }
 
@@ -682,7 +700,30 @@ function initCanvas() {
   canvas.onclick = handleClick;
 }
 
-function setSize(n) {
+function setDifficulty(d) {
+  aiDifficulty = d;
+  document.querySelectorAll('[id^="dbtn-"]').forEach(b => b.classList.remove('selected'));
+  document.getElementById('dbtn-' + d).classList.add('selected');
+}
+
+function startAI() {
+  isAIMode = true;
+  mySymbol = 'O';   // player is always O, AI is X
+  GRID     = lobbyGridSize;
+  initGame();
+  document.getElementById('lobby').style.display = 'none';
+  const g = document.getElementById('game');
+  g.classList.add('visible');
+  // Update card labels
+  document.querySelector('#card-O .label').textContent = 'You';
+  document.querySelector('#card-X .label').textContent = 'AI (' + aiDifficulty.toUpperCase() + ')';
+  document.getElementById('conn-dot').className = 'conn-dot online';
+  document.getElementById('conn-label').textContent = 'VS AI — ' + aiDifficulty.toUpperCase();
+  document.getElementById('room-label').textContent = '';
+  initCanvas();
+  draw();
+  updateUI();
+}
   GRID = n;
   document.querySelectorAll('[id^="btn-"]').forEach(b => b.classList.remove('selected'));
   document.getElementById('btn-' + n).classList.add('selected');
@@ -693,7 +734,7 @@ function resetGame() {
   initCanvas();
   draw();
   updateUI();
-  broadcastState('RESET');
+  if (!isAIMode) broadcastState('RESET');
 }
 
 function toggleRules() {
@@ -714,7 +755,9 @@ function valid(c, r) { return c >= 0 && c < GRID && r >= 0 && r < GRID; }
 // ─── CLICK HANDLER ────────────────────────────────────────────────────────────
 function handleClick(e) {
   if (gameOver) return;
-  if (turn !== mySymbol) return;  // not your turn
+  if (aiThinking) return;
+  if (isAIMode && turn !== 'O') return;   // AI's turn
+  if (!isAIMode && turn !== mySymbol) return;  // online: not your turn
 
   const rect = canvas.getBoundingClientRect();
   const px = (e.clientX - rect.left) * (canvas.width / rect.width);
@@ -751,10 +794,173 @@ function handleClick(e) {
   draw();
   updateUI();
 
-  // Broadcast move to opponent
-  broadcastState('MOVE', { col, row, gained, player: prevTurn });
+  if (isAIMode) {
+    if (gameOver) { endGame(); return; }
+    // Trigger AI move after short delay so player sees their move first
+    setTimeout(doAIMove, 500);
+  } else {
+    // Broadcast move to opponent
+    broadcastState('MOVE', { col, row, gained, player: prevTurn });
+    if (gameOver) endGame();
+  }
+}
 
+// ─── AI ENGINE ────────────────────────────────────────────────────────────────
+
+function doAIMove() {
+  if (gameOver || turn !== 'X') return;
+  aiThinking = true;
+  updateUI();
+
+  const move = pickAIMove();
+  if (move === null) { gameOver = true; endGame(); return; }
+
+  const [col, row] = move;
+  const i = idx(col, row);
+  board[i] = 'X';
+
+  const newTerritory = findNewlyEnclosed('X');
+  let gained = 0;
+  newTerritory.forEach(ci => {
+    if (!enclosed[ci]) {
+      enclosed[ci]   = true;
+      enclosedBy[ci] = 'X';
+      gained++;
+    }
+  });
+  if (gained > 0) {
+    scores['X'] += gained;
+    showGainEffect(col, row, gained, 'X');
+  }
+
+  const hasMoves = board.some((cell, i) => cell === null && !enclosed[i]);
+  if (!hasMoves) gameOver = true;
+
+  turn = 'O';
+  aiThinking = false;
+  draw();
+  updateUI();
   if (gameOver) endGame();
+}
+
+// Returns [col, row] for best AI move based on difficulty
+function pickAIMove() {
+  const free = getFreeCell();
+  if (!free.length) return null;
+
+  if (aiDifficulty === 'easy') {
+    // 20% chance to try a smart move, otherwise random
+    if (Math.random() < 0.2) {
+      const smart = findCapturingMove('X') || findCapturingMove('O');
+      if (smart) return smart;
+    }
+    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  if (aiDifficulty === 'medium') {
+    // 1. Take any move that scores immediately
+    const score = findCapturingMove('X');
+    if (score) return score;
+    // 2. Block player if they're 1 move from scoring
+    const block = findCapturingMove('O');
+    if (block) return block;
+    // 3. Random
+    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  if (aiDifficulty === 'hard') {
+    // 1. Take best scoring move (most points gained)
+    const bestScore = findBestCapturingMove('X');
+    if (bestScore) return bestScore;
+    // 2. Block best player scoring move
+    const bestBlock = findBestCapturingMove('O');
+    if (bestBlock) return bestBlock;
+    // 3. Try to extend existing chains (build toward enclosure)
+    const chain = findChainExtension('X');
+    if (chain) return chain;
+    // 4. Fallback: pick a cell near existing X pieces
+    const near = findNearbyMove('X');
+    if (near) return near;
+    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  return free[Math.floor(Math.random() * free.length)];
+}
+
+// Get all free (non-enclosed, empty) cells
+function getFreeCell() {
+  const cells = [];
+  for (let r = 0; r < GRID; r++)
+    for (let c = 0; c < GRID; c++)
+      if (board[idx(c,r)] === null && !enclosed[idx(c,r)])
+        cells.push([c, r]);
+  return cells;
+}
+
+// Find any move that immediately captures at least 1 enemy piece for `player`
+function findCapturingMove(player) {
+  const free = getFreeCell();
+  // Shuffle for variety
+  for (let i = free.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i+1));
+    [free[i], free[j]] = [free[j], free[i]];
+  }
+  for (const [c, r] of free) {
+    board[idx(c,r)] = player;
+    const gained = findNewlyEnclosed(player).length;
+    board[idx(c,r)] = null;
+    if (gained > 0) return [c, r];
+  }
+  return null;
+}
+
+// Find the move that captures the MOST enemy pieces for `player`
+function findBestCapturingMove(player) {
+  const free = getFreeCell();
+  let best = null, bestScore = 0;
+  for (const [c, r] of free) {
+    board[idx(c,r)] = player;
+    const gained = findNewlyEnclosed(player).length;
+    board[idx(c,r)] = null;
+    if (gained > bestScore) { bestScore = gained; best = [c, r]; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+// Find a move that extends an existing chain of `player` pieces (for Hard AI)
+// Prefers cells adjacent to existing pieces that don't complete player's own enclosure
+function findChainExtension(player) {
+  const free = getFreeCell();
+  const candidates = [];
+  const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  for (const [c, r] of free) {
+    let adjCount = 0;
+    for (const [dc, dr] of DIRS8) {
+      const nc = c+dc, nr = r+dr;
+      if (valid(nc,nr) && board[idx(nc,nr)] === player && !enclosed[idx(nc,nr)])
+        adjCount++;
+    }
+    if (adjCount >= 1) candidates.push({ pos: [c,r], adj: adjCount });
+  }
+  if (!candidates.length) return null;
+  // Pick one with most adjacency, with some randomness
+  candidates.sort((a,b) => b.adj - a.adj);
+  const top = candidates.slice(0, Math.max(1, Math.floor(candidates.length * 0.3)));
+  return top[Math.floor(Math.random() * top.length)].pos;
+}
+
+// Find a move near existing pieces (fallback for Hard)
+function findNearbyMove(player) {
+  const free = getFreeCell();
+  const DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  const nearby = free.filter(([c,r]) =>
+    DIRS8.some(([dc,dr]) => {
+      const nc=c+dc, nr=r+dr;
+      return valid(nc,nr) && board[idx(nc,nr)] === player;
+    })
+  );
+  if (!nearby.length) return null;
+  return nearby[Math.floor(Math.random() * nearby.length)];
 }
 
 // ─── TERRITORY DETECTION ──────────────────────────────────────────────────────
@@ -921,14 +1127,18 @@ function updateUI() {
 
   const status = document.getElementById('status');
   if (!gameOver) {
-    const isMyTurn = turn === mySymbol;
+    const isMyTurn = isAIMode ? (turn === 'O' && !aiThinking) : turn === mySymbol;
     const color = turn==='O'?'#00e5ff':'#ff4d6d';
     status.style.color       = isMyTurn ? color : 'var(--muted)';
     status.style.borderColor = isMyTurn ? color : 'var(--grid-dot)';
     status.style.boxShadow   = isMyTurn ? `0 0 12px ${turn==='O'?'#00e5ff33':'#ff4d6d33'}` : 'none';
-    status.textContent = isMyTurn
-      ? `Your turn — close a loop around enemy pieces to score`
-      : `Opponent's turn — waiting...`;
+    if (isAIMode) {
+      status.textContent = aiThinking ? 'AI is thinking...' : (turn === 'O' ? 'Your turn — close a loop around enemy pieces to score' : 'AI is thinking...');
+    } else {
+      status.textContent = isMyTurn
+        ? 'Your turn — close a loop around enemy pieces to score'
+        : "Opponent's turn — waiting...";
+    }
     canvas.className = isMyTurn ? '' : 'not-your-turn';
   }
 }
